@@ -39,3 +39,6 @@ Space_Propulsion_SPPolimi2526/
 - **Stark100k**: open MATLAB in `Stak100k Rocket Engine Development/` and run `main.m` (whole or by section). Do not run `engine_montecarlo.m` unless you need to regenerate the Monte Carlo results; it takes a long time. `engine_resultsMontecarlo.m` loads the saved results instead.
 
 Each project folder has its own README with details.
+
+## Authors
+All co-authors are acknowledged in the respective reports.
