@@ -1,0 +1,152 @@
+%% Simple MonteCarlo Campaign (Lower-Accuracy Ballistic Model)
+
+if useMontecarlo
+
+% --- Nominal simple-model run (reference for convergence plots) ---
+c_star_nom = grain.initial_CEA_run.output.froz.cstar(1) * 1000;   % [mm/s]
+
+dz_nom = @(Ab) ((1e-5)*(a*1e-3)*(grain.formulation.rho_av)*(c_star_nom*1e-3)*Ab./(grain.at*1e6)).^(n/(1-n));
+Ab_nom = @(z)  (a*z < (grain.Re0-grain.Ri0)*1e3) .* ...
+               (2*pi*(grain.Ri0*1e3 + a*z).*(grain.L0*1e3 - 2*a*z) + ...
+                2*pi*((grain.Re0*1e3)^2 - (grain.Ri0*1e3 + a*z).^2));
+
+t0 = 0; tf = 40; dt = 1e-3; z0 = 0; %#ok<NASGU>
+f  = @(t, z) dz_nom(Ab_nom(z));
+MYRK4_SP_ScriptVersion
+
+dz_num_nom  = dz_nom(Ab_nom(z_vec));
+p_sol_nom   = real(dz_num_nom .^ (1/n));
+T_sol_nom   = p_sol_nom * 1e5 * grain.at * grain.initial_CEA_run.output.froz.cf(3) * grain.LossesCoeff;
+idx_bo_nom  = find(T_sol_nom > 1, 1, 'last');
+real_tb_nom = t_vec(idx_bo_nom);
+Itot_nom    = trapz(t_vec(1:idx_bo_nom), T_sol_nom(1:idx_bo_nom));   % [Ns]
+Tavg_nom    = Itot_nom / real_tb_nom;                                  % [N]
+pmax_nom    = max(p_sol_nom(1:idx_bo_nom));                            % [bar]
+
+% --- Monte Carlo setup ---
+N_MC = 0;
+MC.Tavg = zeros(1, N_MC^2);
+MC.Itot = zeros(1, N_MC^2);
+MC.pmax = zeros(1, N_MC^2);
+
+% Stochastic properties: only a, n
+a_mean  = a;
+n_mean  = n;
+Sigma_a = Inc_a;
+Sigma_n = Inc_n;
+
+% Seeds planting (aleatory uncertainties)
+% 1) Create population before starting
+MC.a_seeds = a_mean + Sigma_a * randn(1, N_MC);
+MC.n_seeds = n_mean + Sigma_n * randn(1, N_MC);
+
+% 2) Create ordered couples
+[a_grid, n_grid] = ndgrid(MC.a_seeds, MC.n_seeds);
+Couples = [a_grid(:), n_grid(:)];
+
+% 3) Shuffle so seeds are tested in an unordered way to monitor convergence
+idx_shuf = randperm(N_MC^2);
+Couples_shuffled = Couples(idx_shuf, :);
+
+% Allocate progressive means/deviations for convergence monitoring
+MC.Tavgmean = zeros(1, N_MC^2);
+MC.Itotmean = zeros(1, N_MC^2);
+MC.pmaxmean = zeros(1, N_MC^2);
+MC.Tavgdev  = zeros(1, N_MC^2);
+MC.Itotdev  = zeros(1, N_MC^2);
+MC.pmaxdev  = zeros(1, N_MC^2);
+
+% USING NOMINAL GEOMETRY COMPUTED WITH NOMINAL a, n (same rationale as
+% Montecarlo.m): grain is manufactured at nominal a,n, then burned with
+% slightly different ballistic coefficients.
+
+% RK4 time settings (fixed across all iterations)
+t0 = 0; tf = 40; dt = 1e-3; z0 = 0;
+
+for k = 1 : N_MC^2
+
+    fprintf("Simple Monte Carlo: iteration %d/%d \n", k, N_MC^2)
+
+    a = Couples_shuffled(k, 1);
+    n = Couples_shuffled(k, 2);
+
+    % Simple quasi-steady ballistic model
+    dz = @(Ab) ((1e-5)*(a*1e-3)*(grain.formulation.rho_av)*(c_star_nom*1e-3)*Ab./(grain.at*1e6)).^(n/(1-n));
+    Ab = @(z)  (a*z < (grain.Re0-grain.Ri0)*1e3) .* ...
+               (2*pi*(grain.Ri0*1e3 + a*z).*(grain.L0*1e3 - 2*a*z) + ...
+                2*pi*((grain.Re0*1e3)^2 - (grain.Ri0*1e3 + a*z).^2));
+
+    f = @(t, z) dz(Ab(z));
+
+    % Integrate regression depth (MYRK4_SP_ScriptVersion uses t0,tf,dt,f,z0)
+    MYRK4_SP_ScriptVersion   % produces t_vec, z_vec; overwrites N internally
+
+    % Post-process: recover p(t) and T(t) from z(t)
+    dz_num = dz(Ab(z_vec));
+    p_sol  = real(dz_num .^ (1/n));                                              % [bar]
+    T_sol  = p_sol * 1e5 * grain.at * grain.initial_CEA_run.output.froz.cf(3) * grain.LossesCoeff; % [N]
+
+    idx_burnout = find(T_sol > 1, 1, 'last');
+    if isempty(idx_burnout), idx_burnout = 1; end
+    real_tb    = t_vec(idx_burnout);
+    real_I_tot = trapz(t_vec(1:idx_burnout), T_sol(1:idx_burnout));   % [Ns]
+    T_avg_k    = real_I_tot / real_tb;                                  % [N]
+    p_max_k    = max(p_sol(1:idx_burnout));                             % [bar]
+
+    MC.Tavg(k) = T_avg_k;
+    MC.Itot(k) = real_I_tot;
+    MC.pmax(k) = p_max_k;
+
+    % Cumulative means and deviations (Law of Large Numbers convergence)
+    MC.Tavgmean(k) = mean(MC.Tavg(1:k));
+    MC.Itotmean(k) = mean(MC.Itot(1:k));
+    MC.pmaxmean(k) = mean(MC.pmax(1:k));
+    MC.Tavgdev(k)  = std(MC.Tavg(1:k));
+    MC.Itotdev(k)  = std(MC.Itot(1:k));
+    MC.pmaxdev(k)  = std(MC.pmax(1:k));
+
+end
+
+%% Convergence plots
+    figure('Name', 'Simple MC Convergence', 'Color', 'w');
+
+    % --- TOP LEFT: Average Thrust Mean ---
+    subplot(3,2,1);
+    plot(1:N_MC^2, MC.Tavgmean, 'b', 'LineWidth', 1.5); hold on;
+    yline(Tavg_nom, '--r', 'Nominal', 'LineWidth', 1.2);
+    grid on; title('Convergence: Mean T_{avg}  (simple model)');
+    ylabel('[N]'); xlabel('Iteration');
+
+    % --- TOP RIGHT: Average Thrust Std Dev ---
+    subplot(3,2,2);
+    plot(1:N_MC^2, MC.Tavgdev, 'k', 'LineWidth', 1.5);
+    grid on; title('Convergence: Std Dev T_{avg}  (simple model)');
+    ylabel('[N]'); xlabel('Iteration');
+
+    % --- MIDDLE LEFT: Total Impulse Mean ---
+    subplot(3,2,3);
+    plot(1:N_MC^2, MC.Itotmean, 'b', 'LineWidth', 1.5); hold on;
+    yline(Itot_nom, '--r', 'Nominal', 'LineWidth', 1.2);
+    grid on; title('Convergence: Mean I_{tot}  (simple model)');
+    ylabel('[Ns]'); xlabel('Iteration');
+
+    % --- MIDDLE RIGHT: Total Impulse Std Dev ---
+    subplot(3,2,4);
+    plot(1:N_MC^2, MC.Itotdev, 'k', 'LineWidth', 1.5);
+    grid on; title('Convergence: Std Dev I_{tot}  (simple model)');
+    ylabel('[Ns]'); xlabel('Iteration');
+
+    % --- BOTTOM LEFT: Peak Pressure Mean ---
+    subplot(3,2,5);
+    plot(1:N_MC^2, MC.pmaxmean, 'b', 'LineWidth', 1.5); hold on;
+    yline(pmax_nom, '--r', 'Nominal', 'LineWidth', 1.2);
+    grid on; title('Convergence: Mean p_{max}  (simple model)');
+    ylabel('[bar]'); xlabel('Iteration');
+
+    % --- BOTTOM RIGHT: Peak Pressure Std Dev ---
+    subplot(3,2,6);
+    plot(1:N_MC^2, MC.pmaxdev, 'k', 'LineWidth', 1.5);
+    grid on; title('Convergence: Std Dev p_{max}  (simple model)');
+    ylabel('[bar]'); xlabel('Iteration');
+
+end

@@ -1,0 +1,96 @@
+function dP = dPTubesHeatFlux(Re,muBulk,muWall,rho,mdotChannels,D,z)
+
+%==========================================================================
+% FUNCTION: dPTubesHeatFlux
+%
+% DESCRIPTION:
+%   Computes the pressure drop in a tube with heat transfer, accounting for
+%   viscosity variations and possible changes in density and cross-section.
+%
+%   The total pressure drop includes:
+%   - Frictional (irreversible) losses along the tube
+%   - Additional pressure variation due to changes in density and/or area
+%
+% INPUTS:
+%   Re            - Reynolds number vector [-]
+%   muBulk        - Fluid dynamic viscosity at bulk temperature [Pa·s]
+%   muWall        - Fluid dynamic viscosity at wall temperature [Pa·s]
+%   rho           - Fluid density vector [kg/m^3]
+%   mdotChannels  - Mass flow rate per channel [kg/s]
+%   D             - Tube diameter vector [m]
+%   z             - Axial coordinate vector along the tube [m]
+%
+% OUTPUT:
+%   dP            - Total pressure drop along the tube [Pa]
+%
+% METHODOLOGY:
+%   - Darcy friction factor is computed locally for each Reynolds value
+%   - A viscosity correction factor is applied: (muBulk/muWall)^0.27
+%   - Local velocity is computed from continuity:
+%         v = mdot / (rho * A)
+%   - Frictional pressure drop is computed by integrating:
+%         dP_f = (1/2) ∫ (f * rho * v^2 / D) dz
+%   - A correction term is added to account for density/area variation:
+%         dP_acc = mdot^2 * (1/(rho_out*A_in) - 1/(rho_in*A_out))
+%
+% ASSUMPTIONS:
+%   - One-dimensional flow
+%   - Flow properties vary only along axial direction
+%   - Discretized profiles are consistent and aligned
+%   - Velocity varies due to density and/or area changes
+%
+% NOTES:
+%   - Uses trapezoidal numerical integration (trapz)
+%   - Includes viscosity correction for heat transfer effects
+%   - Includes acceleration (momentum) contribution to pressure change
+%
+%==========================================================================
+
+
+%--------------------------------------------------------------------------
+% INITIALIZATION
+%--------------------------------------------------------------------------
+n = length(Re);          
+f = zeros(n,1);          
+g = zeros(n,1);          
+vel = zeros(n,1);        
+
+
+%--------------------------------------------------------------------------
+% LOOP OVER DISCRETIZATION POINTS
+%--------------------------------------------------------------------------
+for i = 1:n
+
+    % Friction factor with viscosity correction
+    f(i) = DarcyStraightTubes(Re(i)) * (muBulk(i)/muWall(i))^0.27; 
+
+    % Local velocity from continuity
+    vel(i) = 4 * mdotChannels / (rho(i) * pi * D(i)^2);
+
+    % Integrand for frictional losses
+    g(i) = f(i) * rho(i) * vel(i)^2 / D(i);
+
+end
+
+
+%--------------------------------------------------------------------------
+% FRICTIONAL PRESSURE DROP
+%--------------------------------------------------------------------------
+dPIrr = trapz(z, g) * 0.5;
+
+
+%--------------------------------------------------------------------------
+% ACCELERATION (MOMENTUM) CONTRIBUTION
+%--------------------------------------------------------------------------
+InitialA = 0.25 * pi * D(1)^2;
+FinalA   = 0.25 * pi * D(end)^2;
+
+dPrev = mdotChannels^2 * (1/(rho(end)*InitialA) - 1/(rho(1)*FinalA));
+
+
+%--------------------------------------------------------------------------
+% TOTAL PRESSURE DROP
+%--------------------------------------------------------------------------
+dP = dPIrr + dPrev;
+
+end
